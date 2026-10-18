@@ -16,7 +16,53 @@ function setBoundary(geo){const geom=geo.type==='Feature'?geo.geometry:geo;if(!g
 map.on(L.Draw.Event.CREATED,e=>{try{setBoundary(e.layer.toGeoJSON())}catch(err){say(err.message)}});
 map.on(L.Draw.Event.EDITED,()=>{try{const l=drawn.getLayers()[0];if(l)setBoundary(l.toGeoJSON())}catch(err){say(err.message)}});
 map.on(L.Draw.Event.DELETED,()=>{boundary=null;resetGrid();say('Draw or import a field to begin.')});
-$('upload').addEventListener('change',async e=>{try{const f=e.target.files[0];if(!f)return;const txt=await f.text();let geo;if(/\.kml$/i.test(f.name)){const doc=new DOMParser().parseFromString(txt,'text/xml');if(doc.querySelector('parsererror'))throw Error('Invalid KML');geo=toGeoJSON.kml(doc)}else geo=JSON.parse(txt);const fs=geo.type==='FeatureCollection'?geo.features:[geo];const polys=fs.filter(x=>['Polygon','MultiPolygon'].includes((x.geometry||x).type));if(!polys.length)throw Error('No polygon found in file.');setBoundary(polys[0]);if(polys.length>1)say('Imported first polygon of '+polys.length+'.');}catch(err){say('Import error: '+err.message)}e.target.value='';});
+// Parse KML polygons directly, including polygons nested in MultiGeometry.
+// Using local-name matching makes default and prefixed KML namespaces work alike.
+function kmlElements(parent, name) {
+  return Array.from(parent.getElementsByTagName('*')).filter(el => el.localName === name);
+}
+function kmlRing(boundaryElement) {
+  const coords = kmlElements(boundaryElement, 'coordinates')[0];
+  if (!coords) throw Error('KML polygon has no coordinates.');
+  const ring = coords.textContent.trim().split(/\s+/).map(token => {
+    const parts = token.split(',');
+    const lon = Number(parts[0]), lat = Number(parts[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) throw Error('Invalid KML coordinates.');
+    return [lon, lat];
+  });
+  if (ring.length < 3) throw Error('KML polygon has too few vertices.');
+  if (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]) ring.push([...ring[0]]);
+  if (ring.length < 4) throw Error('Invalid KML polygon ring.');
+  return ring;
+}
+function parseKmlPolygons(doc) {
+  if (kmlElements(doc, 'parsererror').length) throw Error('Invalid KML XML.');
+  const polygons = kmlElements(doc, 'Polygon').map(poly => {
+    const outer = kmlElements(poly, 'outerBoundaryIs')[0];
+    if (!outer) throw Error('KML polygon missing outer boundary.');
+    const rings = [kmlRing(outer), ...kmlElements(poly, 'innerBoundaryIs').map(kmlRing)];
+    return {type:'Feature', properties:{}, geometry:{type:'Polygon', coordinates:rings}};
+  });
+  return polygons;
+}
+$('upload').addEventListener('change', async e => {
+  try {
+    const f=e.target.files[0]; if(!f)return;
+    const txt=await f.text(); let polys;
+    if (/\.kml$/i.test(f.name)) {
+      const doc=new DOMParser().parseFromString(txt,'application/xml');
+      polys=parseKmlPolygons(doc);
+    } else {
+      const geo=JSON.parse(txt);
+      const fs=geo.type==='FeatureCollection'?geo.features:[geo];
+      polys=fs.filter(x=>['Polygon','MultiPolygon'].includes((x.geometry||x).type));
+    }
+    if(!polys.length)throw Error('No polygon found in file.');
+    setBoundary(polys[0]);
+    if(polys.length>1)say('Imported first polygon of '+polys.length+'.');
+  } catch(err) {say('Import error: '+err.message); console.error('Boundary import:',err);}
+  e.target.value='';
+});
 // Local azimuthal equidistant projection around field centroid, in meters.
 function projector(poly){const c=turf.centroid(poly).geometry.coordinates,lon0=c[0]*Math.PI/180,lat0=c[1]*Math.PI/180,R=6371008.8;function forward(p){const lon=p[0]*Math.PI/180,lat=p[1]*Math.PI/180,d=lon-lon0,cosc=Math.min(1,Math.max(-1,Math.sin(lat0)*Math.sin(lat)+Math.cos(lat0)*Math.cos(lat)*Math.cos(d))),ang=Math.acos(cosc),k=ang<1e-10?1:ang/Math.sin(ang);return [R*k*Math.cos(lat)*Math.sin(d),R*k*(Math.cos(lat0)*Math.sin(lat)-Math.sin(lat0)*Math.cos(lat)*Math.cos(d))]}function inverse(p){const rho=Math.hypot(...p),c=rho/R;if(rho<1e-10)return [cLon(),cLat()];const lat=Math.asin(Math.cos(c)*Math.sin(lat0)+p[1]*Math.sin(c)*Math.cos(lat0)/rho),lon=lon0+Math.atan2(p[0]*Math.sin(c),rho*Math.cos(lat0)*Math.cos(c)-p[1]*Math.sin(lat0)*Math.sin(c));return [lon*180/Math.PI,lat*180/Math.PI]}function cLon(){return lon0*180/Math.PI}function cLat(){return lat0*180/Math.PI}return {forward,inverse};}
 function rotate(p,a){return [p[0]*Math.cos(a)+p[1]*Math.sin(a),-p[0]*Math.sin(a)+p[1]*Math.cos(a)]}function unrotate(p,a){return [p[0]*Math.cos(a)-p[1]*Math.sin(a),p[0]*Math.sin(a)+p[1]*Math.cos(a)]}

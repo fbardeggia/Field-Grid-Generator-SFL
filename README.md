@@ -27,3 +27,5 @@ The app always opens with satellite imagery. The nonworking Streets basemap opti
 - Manual angle input appears only when Manual angle alignment is selected.
 
 Drawing style: small circular vertices and solid navy polygon outline.
+
+KML import update: native XML polygon parsing, including nested MultiGeometry and inner rings.
