@@ -29,3 +29,12 @@ The app always opens with satellite imagery. The nonworking Streets basemap opti
 Drawing style: small circular vertices and solid navy polygon outline.
 
 KML import update: native XML polygon parsing, including nested MultiGeometry and inner rings.
+
+### Supported boundary formats
+- KML, including polygons in MultiGeometry.
+- KMZ (zipped KML; prefers `doc.kml`).
+- GeoJSON (`.geojson`, `.json`).
+- ESRI shapefile as `.zip` containing `.shp`, `.shx`, `.dbf`, and `.prj`.
+The `.prj` is required for correct positioning; the browser uses the shpjs library.
+For files with multiple polygons, the first polygon is used. All files are read in the browser.
+The application uses CDN-hosted JavaScript libraries and map imagery, so an internet connection is needed.

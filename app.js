@@ -45,22 +45,60 @@ function parseKmlPolygons(doc) {
   });
   return polygons;
 }
-$('upload').addEventListener('change', async e => {
-  try {
-    const f=e.target.files[0]; if(!f)return;
-    const txt=await f.text(); let polys;
-    if (/\.kml$/i.test(f.name)) {
-      const doc=new DOMParser().parseFromString(txt,'application/xml');
-      polys=parseKmlPolygons(doc);
-    } else {
-      const geo=JSON.parse(txt);
-      const fs=geo.type==='FeatureCollection'?geo.features:[geo];
-      polys=fs.filter(x=>['Polygon','MultiPolygon'].includes((x.geometry||x).type));
+// Accept KML, KMZ, GeoJSON and zipped ESRI shapefiles.
+// SHP is multipart: .shp + .shx + .dbf + .prj, packaged together as .zip.
+function polygonFeatures(geo) {
+  const entries=Array.isArray(geo)?geo:[geo];
+  const output=[];
+  for(const entry of entries) {
+    if(!entry)continue;
+    const fs=entry.type==='FeatureCollection'?entry.features:[entry];
+    for(const f of fs) {
+      const geom=f.type==='Feature'?f.geometry:f;
+      if(geom&&['Polygon','MultiPolygon'].includes(geom.type))
+        output.push({type:'Feature',properties:f.properties||{},geometry:geom});
+      if(geom&&geom.type==='GeometryCollection')
+        for(const g of geom.geometries||[])
+          if(['Polygon','MultiPolygon'].includes(g.type))
+            output.push({type:'Feature',properties:f.properties||{},geometry:g});
     }
-    if(!polys.length)throw Error('No polygon found in file.');
+  }
+  return output;
+}
+async function readBoundaryFile(file) {
+  const name=file.name.toLowerCase();
+  if(name.endsWith('.kml')) {
+    return parseKmlPolygons(new DOMParser().parseFromString(await file.text(),'application/xml'));
+  }
+  if(name.endsWith('.kmz')) {
+    if(typeof JSZip==='undefined')throw Error('KMZ library could not load. Check internet connection.');
+    const zip=await JSZip.loadAsync(await file.arrayBuffer());
+    const entries=Object.values(zip.files).filter(f=>!f.dir&&f.name.toLowerCase().endsWith('.kml'));
+    if(!entries.length)throw Error('This KMZ does not contain a KML document.');
+    const preferred=entries.find(f=>/(^|\/)doc\.kml$/i.test(f.name))||entries[0];
+    return parseKmlPolygons(new DOMParser().parseFromString(await preferred.async('string'),'application/xml'));
+  }
+  if(name.endsWith('.zip')) {
+    if(typeof shp==='undefined')throw Error('Shapefile library could not load. Check internet connection.');
+    const zip=await JSZip.loadAsync(await file.arrayBuffer());
+    const names=Object.keys(zip.files).map(s=>s.toLowerCase());
+    if(!names.some(s=>s.endsWith('.shp')))throw Error('ZIP must contain an .shp file.');
+    if(!names.some(s=>s.endsWith('.prj')))throw Error('ZIP must contain a .prj file to locate the field correctly.');
+    return polygonFeatures(await shp(await file.arrayBuffer()));
+  }
+  if(name.endsWith('.shp'))throw Error('Please ZIP the .shp together with its .shx, .dbf and .prj files, then upload the ZIP.');
+  if(name.endsWith('.geojson')||name.endsWith('.json'))return polygonFeatures(JSON.parse(await file.text()));
+  throw Error('Unsupported file type. Use KML, KMZ, GeoJSON or a zipped shapefile.');
+}
+$('upload').addEventListener('change',async e=>{
+  try{
+    const f=e.target.files[0];if(!f)return;
+    say('Importing '+f.name+'...');
+    const polys=await readBoundaryFile(f);
+    if(!polys.length)throw Error('No polygon boundary found in the file.');
     setBoundary(polys[0]);
     if(polys.length>1)say('Imported first polygon of '+polys.length+'.');
-  } catch(err) {say('Import error: '+err.message); console.error('Boundary import:',err);}
+  }catch(err){say('Import error: '+err.message);console.error('Boundary import:',err);}
   e.target.value='';
 });
 // Local azimuthal equidistant projection around field centroid, in meters.
